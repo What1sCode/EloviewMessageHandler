@@ -135,6 +135,7 @@ function formatPhoneNumber(phone) {
   // Remove all non-digit characters
   const digitsOnly = phone.replace(/\D/g, '');
   
+  // Only process US numbers that we're confident about
   // If it's already 11 digits starting with 1, format as US number
   if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
     const areaCode = digitsOnly.slice(1, 4);
@@ -143,16 +144,19 @@ function formatPhoneNumber(phone) {
     return `+1 (${areaCode}) ${exchange}-${number}`;
   }
   
-  // If it's 10 digits, assume US and add country code
+  // If it's 10 digits and looks like a valid US number
   if (digitsOnly.length === 10) {
     const areaCode = digitsOnly.slice(0, 3);
-    const exchange = digitsOnly.slice(3, 6);
-    const number = digitsOnly.slice(6);
-    return `+1 (${areaCode}) ${exchange}-${number}`;
+    // Only format if it looks like a valid US area code
+    if (areaCode >= '200' && areaCode <= '999' && !areaCode.startsWith('0') && !areaCode.startsWith('1')) {
+      const exchange = digitsOnly.slice(3, 6);
+      const number = digitsOnly.slice(6);
+      return `+1 (${areaCode}) ${exchange}-${number}`;
+    }
   }
   
-  // If it doesn't match common patterns, return null to skip phone
-  console.log(`Phone number "${phone}" couldn't be formatted to E.164, skipping`);
+  // For any other format, skip the phone field to avoid validation errors
+  console.log(`Phone number "${phone}" doesn't match US format, skipping phone field to avoid validation errors`);
   return null;
 }
 
