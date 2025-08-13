@@ -422,15 +422,14 @@ async function processTicket(ticketId) {
       console.log(`User already exists: ${user.id} (${user.email})`);
     }
 
-    // Update ticket requestor and apply macro
-    await updateTicket(ticketId, user.id);
-
-    // Apply the specified macro
+    // Apply the specified macro FIRST, before closing the ticket
     try {
       // First verify the macro exists
       const macro = await verifyMacro(MACRO_ID);
       if (macro) {
+        console.log('Applying macro before closing ticket...');
         await applyMacro(ticketId, MACRO_ID);
+        console.log('✅ Macro applied successfully');
       } else {
         console.log(`Warning: Macro ${MACRO_ID} not found, skipping macro application`);
       }
@@ -438,6 +437,9 @@ async function processTicket(ticketId) {
       console.log(`Warning: Could not apply macro ${MACRO_ID}:`, macroError.message);
       // Continue even if macro fails
     }
+
+    // Then update ticket requestor and close it
+    await updateTicket(ticketId, user.id);
 
     return {
       success: true,
