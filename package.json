@@ -1,0 +1,30 @@
+{
+  "name": "zendesk-contact-creator",
+  "version": "1.0.0",
+  "description": "Automatically creates Zendesk users from ticket contact information",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "zendesk",
+    "webhook",
+    "contact-management",
+    "automation"
+  ],
+  "author": "Roger Rhodes",
+  "license": "MIT"
+}
