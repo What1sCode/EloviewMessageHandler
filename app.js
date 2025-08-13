@@ -8,6 +8,7 @@ const ZENDESK_DOMAIN = 'https://elotouchcare.zendesk.com';
 const API_TOKEN = 'AItwPQ8Jdd5pVqaX9ZQYzoxRlf8SCr0ha3FK9AhX';
 const TARGET_TAG = 'ev_new_message';
 const MACRO_ID = '31986608070935';
+const TARGET_GROUP_ID = '31112854673047'; // TS - NA/LATAM group ID
 
 // Zendesk admin email for Basic Auth
 const ZENDESK_EMAIL = 'roger.rhodes@elotouch.com';
@@ -199,15 +200,17 @@ async function createUser(contactInfo) {
   }
 }
 
-// Update ticket with requestor, status, and macro
+// Update ticket with requestor, status, and group assignment
 async function updateTicket(ticketId, userId) {
   try {
     const updateData = {
       ticket: {
         requester_id: userId,
-        status: 'solved',
+        status: 'closed', // Use 'closed' instead of 'solved' to prevent reopening
+        assignee_id: null, // Remove individual assignee
+        group_id: 31112854673047, // Assign to "Elo Technical Support" group
         comment: {
-          body: 'Contact information processed and user assigned automatically.',
+          body: 'Contact information processed and user assigned automatically. This ticket has been solved and closed.',
           public: false
         }
       }
@@ -221,7 +224,7 @@ async function updateTicket(ticketId, userId) {
       { headers: getZendeskHeaders() }
     );
 
-    console.log(`Updated ticket ${ticketId} with requestor ${userId} and status 'solved'`);
+    console.log(`Updated ticket ${ticketId} with requestor ${userId}, assigned to group, and status 'solved'`);
     return response.data.ticket;
   } catch (error) {
     console.error('Error updating ticket - Status:', error.response?.status);
