@@ -200,23 +200,22 @@ async function createUser(contactInfo) {
   }
 }
 
-// Update ticket with requestor, status, and group assignment
-async function updateTicket(ticketId, userId) {
+// Update ticket with requestor and group assignment (but keep it open for macro)
+async function updateTicketRequestor(ticketId, userId) {
   try {
     const updateData = {
       ticket: {
         requester_id: userId,
-        status: 'closed', // Use 'closed' instead of 'solved' to prevent reopening
         assignee_id: null, // Remove individual assignee
         group_id: 31112854673047, // Assign to "Elo Technical Support" group
         comment: {
-          body: 'Contact information processed and user assigned automatically. This ticket has been solved and closed.',
+          body: 'Contact information processed and user assigned automatically.',
           public: false
         }
       }
     };
 
-    console.log('Attempting to update ticket with data:', JSON.stringify(updateData, null, 2));
+    console.log('Attempting to update ticket requestor with data:', JSON.stringify(updateData, null, 2));
 
     const response = await axios.put(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
@@ -224,12 +223,43 @@ async function updateTicket(ticketId, userId) {
       { headers: getZendeskHeaders() }
     );
 
-    console.log(`Updated ticket ${ticketId} with requestor ${userId}, assigned to group, and status 'solved'`);
+    console.log(`Updated ticket ${ticketId} with requestor ${userId} and assigned to group`);
     return response.data.ticket;
   } catch (error) {
-    console.error('Error updating ticket - Status:', error.response?.status);
-    console.error('Error updating ticket - Data:', JSON.stringify(error.response?.data, null, 2));
-    console.error('Error updating ticket - Message:', error.message);
+    console.error('Error updating ticket requestor - Status:', error.response?.status);
+    console.error('Error updating ticket requestor - Data:', JSON.stringify(error.response?.data, null, 2));
+    console.error('Error updating ticket requestor - Message:', error.message);
+    throw error;
+  }
+}
+
+// Close ticket after macro is applied
+async function closeTicket(ticketId) {
+  try {
+    const updateData = {
+      ticket: {
+        status: 'closed', // Use 'closed' instead of 'solved' to prevent reopening
+        comment: {
+          body: 'EV4 Welcome email sent. This ticket has been solved and closed.',
+          public: false
+        }
+      }
+    };
+
+    console.log('Attempting to close ticket with data:', JSON.stringify(updateData, null, 2));
+
+    const response = await axios.put(
+      `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
+      updateData,
+      { headers: getZendeskHeaders() }
+    );
+
+    console.log(`Closed ticket ${ticketId}`);
+    return response.data.ticket;
+  } catch (error) {
+    console.error('Error closing ticket - Status:', error.response?.status);
+    console.error('Error closing ticket - Data:', JSON.stringify(error.response?.data, null, 2));
+    console.error('Error closing ticket - Message:', error.message);
     throw error;
   }
 }
@@ -313,8 +343,8 @@ async function applyMacro(ticketId, macroId) {
           console.log(`Adding comment from macro: ${action.value.substring(0, 100)}...`);
           break;
         case 'status':
-          // Don't override the status we already set to 'solved'
-          console.log(`Macro wants to set status to: ${action.value} (keeping current 'solved')`);
+          updateData.ticket.status = action.value;
+          console.log(`Setting status from macro to: ${action.value}`);
           break;
         case 'priority':
           updateData.ticket.priority = action.value;
@@ -374,7 +404,7 @@ async function getTicketDetails(ticketId) {
   }
 }
 
-// Main processing function
+// Main processing function - FIXED ORDER
 async function processTicket(ticketId) {
   try {
     console.log(`Processing ticket ${ticketId}`);
@@ -422,14 +452,17 @@ async function processTicket(ticketId) {
       console.log(`User already exists: ${user.id} (${user.email})`);
     }
 
-    // Apply the specified macro FIRST, before closing the ticket
+    // STEP 1: Update ticket with user as requestor FIRST
+    console.log('Step 1: Setting ticket requestor to ensure macro email goes to correct recipient...');
+    await updateTicketRequestor(ticketId, user.id);
+
+    // STEP 2: Apply the macro (now that the requestor is set correctly)
     try {
-      // First verify the macro exists
       const macro = await verifyMacro(MACRO_ID);
       if (macro) {
-        console.log('Applying macro before closing ticket...');
+        console.log('Step 2: Applying macro with correct requestor...');
         await applyMacro(ticketId, MACRO_ID);
-        console.log('✅ Macro applied successfully');
+        console.log('✅ Macro applied successfully - email should go to customer');
       } else {
         console.log(`Warning: Macro ${MACRO_ID} not found, skipping macro application`);
       }
@@ -438,8 +471,9 @@ async function processTicket(ticketId) {
       // Continue even if macro fails
     }
 
-    // Then update ticket requestor and close it
-    await updateTicket(ticketId, user.id);
+    // STEP 3: Close the ticket (optional - the macro might already do this)
+    console.log('Step 3: Closing ticket...');
+    await closeTicket(ticketId);
 
     return {
       success: true,
