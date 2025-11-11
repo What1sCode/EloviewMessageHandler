@@ -129,30 +129,43 @@ async function findUserByEmail(email) {
   }
 }
 
-// Format phone number to E.164 format
+// Format phone number to E.164 format: +1XXXXXXXXXX
 function formatPhoneNumber(phone) {
   if (!phone) return null;
   
   // Remove all non-digit characters
   const digitsOnly = phone.replace(/\D/g, '');
   
+  // Invalid area codes (special service numbers)
+  const invalidAreaCodes = ['211', '311', '411', '511', '611', '711', '811', '911'];
+  
   // Only process US numbers that we're confident about
   // If it's already 11 digits starting with 1, format as US number
   if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
     const areaCode = digitsOnly.slice(1, 4);
-    const exchange = digitsOnly.slice(4, 7);
-    const number = digitsOnly.slice(7);
-    return `+1 (${areaCode}) ${exchange}-${number}`;
+    
+    // Check if it's a valid area code
+    if (invalidAreaCodes.includes(areaCode)) {
+      console.log(`Phone number "${phone}" has invalid area code ${areaCode} (special service number), skipping phone field`);
+      return null;
+    }
+    
+    return `+${digitsOnly}`;
   }
   
   // If it's 10 digits and looks like a valid US number
   if (digitsOnly.length === 10) {
     const areaCode = digitsOnly.slice(0, 3);
+    
     // Only format if it looks like a valid US area code
-    if (areaCode >= '200' && areaCode <= '999' && !areaCode.startsWith('0') && !areaCode.startsWith('1')) {
-      const exchange = digitsOnly.slice(3, 6);
-      const number = digitsOnly.slice(6);
-      return `+1 (${areaCode}) ${exchange}-${number}`;
+    if (areaCode >= '200' && areaCode <= '999' && 
+        !areaCode.startsWith('0') && 
+        !areaCode.startsWith('1') &&
+        !invalidAreaCodes.includes(areaCode)) {
+      return `+1${digitsOnly}`;
+    } else {
+      console.log(`Phone number "${phone}" has invalid area code ${areaCode}, skipping phone field`);
+      return null;
     }
   }
   
@@ -195,7 +208,11 @@ async function createUser(contactInfo) {
   } catch (error) {
     console.error('Error creating user - Status:', error.response?.status);
     console.error('Error creating user - Data:', JSON.stringify(error.response?.data, null, 2));
+    console.error('Error creating user - Details:', JSON.stringify(error.response?.data?.details, null, 2));
+    console.error('Error creating user - Description:', error.response?.data?.description);
+    console.error('Error creating user - Error:', error.response?.data?.error);
     console.error('Error creating user - Message:', error.message);
+    console.error('User data that caused error:', JSON.stringify(userData, null, 2));
     throw error;
   }
 }
@@ -228,6 +245,7 @@ async function updateTicketRequestor(ticketId, userId) {
   } catch (error) {
     console.error('Error updating ticket requestor - Status:', error.response?.status);
     console.error('Error updating ticket requestor - Data:', JSON.stringify(error.response?.data, null, 2));
+    console.error('Error updating ticket requestor - Details:', JSON.stringify(error.response?.data?.details, null, 2));
     console.error('Error updating ticket requestor - Message:', error.message);
     throw error;
   }
