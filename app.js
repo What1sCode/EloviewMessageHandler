@@ -6,8 +6,8 @@ const app = express();
 // Configuration - USE ENVIRONMENT VARIABLES
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || 'elotouchcare';
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || `https://${ZENDESK_SUBDOMAIN}.zendesk.com`;
-const API_TOKEN = process.env.ZENDESK_API_TOKEN || 'AItwPQ8Jdd5pVqaX9ZQYzoxRlf8SCr0ha3FK9AhX';
-const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || 'roger.rhodes@elotouch.com';
+const API_TOKEN = process.env.ZENDESK_API_TOKEN;
+const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
 const TARGET_TAG = process.env.TARGET_TAG || 'ev_new_message';
 const MACRO_ID = process.env.MACRO_ID || '31986608070935';
 const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS - NA/LATAM group ID
@@ -146,14 +146,40 @@ function formatPhoneNumber(phone) {
   // Invalid area codes (special service numbers)
   const invalidAreaCodes = ['211', '311', '411', '511', '611', '711', '811', '911'];
   
+  // Detect fake/test numbers (all same digit, sequential, or obvious patterns)
+  function isFakeNumber(digits) {
+    // All same digit (1111111111, 0000000000, etc.)
+    if (/^(\d)\1+$/.test(digits)) return true;
+    
+    // Common test patterns
+    const testPatterns = [
+      '1234567890', '0987654321', '1111111111', '0000000000',
+      '1231231234', '5555555555', '9999999999'
+    ];
+    if (testPatterns.includes(digits)) return true;
+    
+    // Check the subscriber part (last 7 digits) for all same digit
+    const subscriberPart = digits.slice(-7);
+    if (/^(\d)\1+$/.test(subscriberPart)) return true;
+    
+    return false;
+  }
+  
   // Only process US numbers that we're confident about
   // If it's already 11 digits starting with 1, format as US number
   if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
     const areaCode = digitsOnly.slice(1, 4);
+    const withoutCountryCode = digitsOnly.slice(1);
     
     // Check if it's a valid area code
     if (invalidAreaCodes.includes(areaCode)) {
       console.log(`Phone number "${phone}" has invalid area code ${areaCode} (special service number), skipping phone field`);
+      return null;
+    }
+    
+    // Check for fake numbers
+    if (isFakeNumber(withoutCountryCode)) {
+      console.log(`Phone number "${phone}" appears to be a fake/test number, skipping phone field`);
       return null;
     }
     
@@ -163,6 +189,12 @@ function formatPhoneNumber(phone) {
   // If it's 10 digits and looks like a valid US number
   if (digitsOnly.length === 10) {
     const areaCode = digitsOnly.slice(0, 3);
+    
+    // Check for fake numbers
+    if (isFakeNumber(digitsOnly)) {
+      console.log(`Phone number "${phone}" appears to be a fake/test number, skipping phone field`);
+      return null;
+    }
     
     // Only format if it looks like a valid US area code
     if (areaCode >= '200' && areaCode <= '999' && 
@@ -220,6 +252,26 @@ async function createUser(contactInfo) {
     console.error('Error creating user - Error:', error.response?.data?.error);
     console.error('Error creating user - Message:', error.message);
     console.error('User data that caused error:', JSON.stringify(userData, null, 2));
+    
+    // If the error is due to phone validation, retry without phone
+    if (error.response?.status === 422 && error.response?.data?.details?.phone) {
+      console.log('Phone validation failed, retrying without phone number...');
+      delete userData.user.phone;
+      
+      try {
+        const retryResponse = await axios.post(
+          `${ZENDESK_DOMAIN}/api/v2/users/create_or_update.json`,
+          userData,
+          { headers: getZendeskHeaders() }
+        );
+        console.log('Created/updated user (without phone):', retryResponse.data.user.id);
+        return retryResponse.data.user;
+      } catch (retryError) {
+        console.error('Retry without phone also failed:', retryError.message);
+        throw retryError;
+      }
+    }
+    
     throw error;
   }
 }
