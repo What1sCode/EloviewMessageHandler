@@ -9,8 +9,23 @@ const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || `https://${ZENDESK_SUBDOMAI
 const API_TOKEN = process.env.ZENDESK_API_TOKEN;
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
 const TARGET_TAG = process.env.TARGET_TAG || 'ev_new_message';
+const PROCESSED_TAG = 'ev_processed'; // Tag to mark tickets as processed
 const MACRO_ID = process.env.MACRO_ID || '31986608070935';
 const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS - NA/LATAM group ID
+
+// In-memory cache to prevent duplicate processing within short time windows
+const recentlyProcessed = new Map();
+const PROCESSING_COOLDOWN_MS = 60000; // 1 minute cooldown
+
+// Clean up old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ticketId, timestamp] of recentlyProcessed.entries()) {
+    if (now - timestamp > PROCESSING_COOLDOWN_MS) {
+      recentlyProcessed.delete(ticketId);
+    }
+  }
+}, 300000);
 
 // Validate required environment variables on startup
 if (!API_TOKEN || !ZENDESK_EMAIL) {
@@ -284,6 +299,7 @@ async function updateTicketRequestor(ticketId, userId) {
         requester_id: userId,
         assignee_id: null, // Remove individual assignee
         group_id: parseInt(TARGET_GROUP_ID), // Assign to "Elo Technical Support" group
+        additional_tags: [PROCESSED_TAG], // Mark as processed to prevent re-processing
         comment: {
           body: 'Contact information processed and user assigned automatically.',
           public: false
@@ -449,6 +465,12 @@ async function processTicket(ticketId) {
   try {
     console.log(`Processing ticket ${ticketId}`);
 
+    // Check in-memory cache first (fast check for rapid duplicate webhooks)
+    if (recentlyProcessed.has(ticketId)) {
+      console.log(`Ticket ${ticketId} was recently processed, skipping (in-memory cache)`);
+      return { success: false, reason: 'Recently processed (cooldown)' };
+    }
+
     // Get ticket details
     const ticket = await getTicketDetails(ticketId);
     
@@ -457,6 +479,15 @@ async function processTicket(ticketId) {
       console.log(`Ticket ${ticketId} doesn't have ${TARGET_TAG} tag, skipping`);
       return { success: false, reason: 'Missing target tag' };
     }
+
+    // Check if ticket was already processed (has the processed tag)
+    if (ticket.tags.includes(PROCESSED_TAG)) {
+      console.log(`Ticket ${ticketId} already has ${PROCESSED_TAG} tag, skipping`);
+      return { success: false, reason: 'Already processed' };
+    }
+
+    // Mark as being processed in memory cache
+    recentlyProcessed.set(ticketId, Date.now());
 
     // Extract contact information from ticket description and comments
     let ticketContent = ticket.description || '';
