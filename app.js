@@ -6,8 +6,8 @@ const app = express();
 // Configuration - USE ENVIRONMENT VARIABLES
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || 'elotouchcare';
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || `https://${ZENDESK_SUBDOMAIN}.zendesk.com`;
-const API_TOKEN = process.env.ZENDESK_API_TOKEN;
-const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
+const API_TOKEN = process.env.ZENDESK_API_TOKEN || 'absjBGARkHbN9kUU9bUH9gSOHO7PalvSFNc5FHam';
+const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL || 'roger.rhodes@elotouch.com';
 const TARGET_TAG = process.env.TARGET_TAG || 'ev_new_message';
 const MACRO_ID = process.env.MACRO_ID || '31986608070935';
 const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS - NA/LATAM group ID
