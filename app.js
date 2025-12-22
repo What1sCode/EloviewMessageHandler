@@ -3,28 +3,35 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const app = express();
 
-// Configuration
-const ZENDESK_DOMAIN = 'https://elotouchcare.zendesk.com';
-const API_TOKEN = 'AItwPQ8Jdd5pVqaX9ZQYzoxRlf8SCr0ha3FK9AhX';
-const TARGET_TAG = 'ev_new_message';
-const MACRO_ID = '31986608070935';
-const TARGET_GROUP_ID = '31112854673047'; // TS - NA/LATAM group ID
+// Configuration - USE ENVIRONMENT VARIABLES
+const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || 'elotouchcare';
+const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || `https://${ZENDESK_SUBDOMAIN}.zendesk.com`;
+const API_TOKEN = process.env.ZENDESK_API_TOKEN;
+const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
+const TARGET_TAG = process.env.TARGET_TAG || 'ev_new_message';
+const MACRO_ID = process.env.MACRO_ID || '31986608070935';
+const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS - NA/LATAM group ID
 
-// Zendesk admin email for Basic Auth
-const ZENDESK_EMAIL = 'roger.rhodes@elotouch.com';
+// Validate required environment variables on startup
+if (!API_TOKEN || !ZENDESK_EMAIL) {
+  console.error('❌ FATAL: Missing required environment variables!');
+  console.error('   Required: ZENDESK_API_TOKEN, ZENDESK_EMAIL');
+  console.error('   Current values:');
+  console.error(`   - ZENDESK_API_TOKEN: ${API_TOKEN ? '[SET]' : '[MISSING]'}`);
+  console.error(`   - ZENDESK_EMAIL: ${ZENDESK_EMAIL ? '[SET]' : '[MISSING]'}`);
+  process.exit(1);
+}
 
 // Middleware
 app.use(express.json());
 
 // Helper function to create authenticated Zendesk API headers
 function getZendeskHeaders() {
-  // Try different authentication methods
   const authString = Buffer.from(`${ZENDESK_EMAIL}/token:${API_TOKEN}`).toString('base64');
   
   return {
     'Content-Type': 'application/json',
     'Authorization': `Basic ${authString}`
-    // Alternative: 'X-API-Key': API_TOKEN
   };
 }
 
@@ -176,16 +183,16 @@ function formatPhoneNumber(phone) {
 
 // Create new user in Zendesk
 async function createUser(contactInfo) {
-  try {
-    const userData = {
-      user: {
-        name: `${contactInfo.firstName} ${contactInfo.lastName}`.trim(),
-        email: contactInfo.email,
-        role: 'end-user',
-        verified: true
-      }
-    };
+  const userData = {
+    user: {
+      name: `${contactInfo.firstName} ${contactInfo.lastName}`.trim(),
+      email: contactInfo.email,
+      role: 'end-user',
+      verified: true
+    }
+  };
 
+  try {
     // Only add phone if it can be properly formatted
     if (contactInfo.phone) {
       const formattedPhone = formatPhoneNumber(contactInfo.phone);
@@ -224,7 +231,7 @@ async function updateTicketRequestor(ticketId, userId) {
       ticket: {
         requester_id: userId,
         assignee_id: null, // Remove individual assignee
-        group_id: 31112854673047, // Assign to "Elo Technical Support" group
+        group_id: parseInt(TARGET_GROUP_ID), // Assign to "Elo Technical Support" group
         comment: {
           body: 'Contact information processed and user assigned automatically.',
           public: false
@@ -245,26 +252,18 @@ async function updateTicketRequestor(ticketId, userId) {
   } catch (error) {
     console.error('Error updating ticket requestor - Status:', error.response?.status);
     console.error('Error updating ticket requestor - Data:', JSON.stringify(error.response?.data, null, 2));
-    console.error('Error updating ticket requestor - Details:', JSON.stringify(error.response?.data?.details, null, 2));
-    console.error('Error updating ticket requestor - Message:', error.message);
     throw error;
   }
 }
 
-// Close ticket after macro is applied
+// Close ticket
 async function closeTicket(ticketId) {
   try {
     const updateData = {
       ticket: {
-        status: 'closed', // Use 'closed' instead of 'solved' to prevent reopening
-        comment: {
-          body: 'EV4 Welcome email sent. This ticket has been solved and closed.',
-          public: false
-        }
+        status: 'solved'
       }
     };
-
-    console.log('Attempting to close ticket with data:', JSON.stringify(updateData, null, 2));
 
     const response = await axios.put(
       `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
@@ -275,14 +274,12 @@ async function closeTicket(ticketId) {
     console.log(`Closed ticket ${ticketId}`);
     return response.data.ticket;
   } catch (error) {
-    console.error('Error closing ticket - Status:', error.response?.status);
-    console.error('Error closing ticket - Data:', JSON.stringify(error.response?.data, null, 2));
-    console.error('Error closing ticket - Message:', error.message);
+    console.error('Error closing ticket:', error.response?.data || error.message);
     throw error;
   }
 }
 
-// Check if macro exists
+// Verify macro exists and is active
 async function verifyMacro(macroId) {
   try {
     const response = await axios.get(
@@ -290,59 +287,32 @@ async function verifyMacro(macroId) {
       { headers: getZendeskHeaders() }
     );
     
-    console.log(`Macro ${macroId} exists: "${response.data.macro.title}"`);
-    return response.data.macro;
+    const macro = response.data.macro;
+    console.log(`Found macro: "${macro.title}" (ID: ${macro.id}, Active: ${macro.active})`);
+    console.log('Macro actions:', JSON.stringify(macro.actions, null, 2));
+    
+    return macro;
   } catch (error) {
-    console.error(`Macro ${macroId} not found:`, error.response?.data || error.message);
+    console.error('Error verifying macro:', error.response?.data || error.message);
     return null;
   }
 }
 
-// Apply macro to ticket and execute its actions
+// Apply macro to ticket
 async function applyMacro(ticketId, macroId) {
   try {
-    console.log(`Getting macro ${macroId} details first...`);
-    
-    // First, get the macro to see what it contains
+    // First, get the macro to see its actions
     const macroResponse = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
       { headers: getZendeskHeaders() }
     );
     
     const macro = macroResponse.data.macro;
-    console.log(`Macro "${macro.title}" has ${macro.actions.length} actions`);
+    console.log(`Applying macro "${macro.title}" to ticket ${ticketId}`);
+    console.log('Macro actions:', JSON.stringify(macro.actions, null, 2));
     
-    // Try to execute the macro using the show endpoint and apply
-    try {
-      console.log(`Attempting to execute macro ${macroId} on ticket ${ticketId}...`);
-      
-      const executeResponse = await axios.get(
-        `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}/macros/${macroId}/apply.json`,
-        { headers: getZendeskHeaders() }
-      );
-      
-      // Now apply the result
-      if (executeResponse.data && executeResponse.data.result) {
-        const result = executeResponse.data.result;
-        console.log('Applying macro execution result...');
-        
-        const applyResponse = await axios.put(
-          `${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`,
-          { ticket: result.ticket },
-          { headers: getZendeskHeaders() }
-        );
-        
-        console.log(`✅ Successfully executed and applied macro ${macroId} to ticket ${ticketId}`);
-        return applyResponse.data;
-      }
-    } catch (executeError) {
-      console.log('Macro execution failed, manually applying macro actions...');
-    }
-    
-    // Manual application - extract and apply each action
-    const updateData = {
-      ticket: {}
-    };
+    // Build ticket update based on macro actions
+    const updateData = { ticket: {} };
     
     let hasComment = false;
     
@@ -571,12 +541,40 @@ app.get('/test-macro/:macroId', async (req, res) => {
   }
 });
 
+// Test auth endpoint - verify credentials are working
+app.get('/test-auth', async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${ZENDESK_DOMAIN}/api/v2/users/me.json`,
+      { headers: getZendeskHeaders() }
+    );
+    
+    res.json({
+      success: true,
+      authenticated_as: response.data.user.email,
+      user_id: response.data.user.id,
+      role: response.data.user.role
+    });
+  } catch (error) {
+    res.status(error.response?.status || 500).json({ 
+      success: false,
+      status: error.response?.status,
+      error: error.response?.data || error.message,
+      hint: error.response?.status === 401 ? 
+        'Check ZENDESK_API_TOKEN and ZENDESK_EMAIL environment variables' : 
+        'Unknown error'
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    zendesk_domain: ZENDESK_DOMAIN
+    zendesk_domain: ZENDESK_DOMAIN,
+    email_configured: !!ZENDESK_EMAIL,
+    token_configured: !!API_TOKEN
   });
 });
 
@@ -586,6 +584,8 @@ app.listen(PORT, () => {
   console.log(`Zendesk Contact Creator running on port ${PORT}`);
   console.log(`Webhook endpoint: http://localhost:${PORT}/webhook/zendesk`);
   console.log(`Manual processing: http://localhost:${PORT}/process-ticket/{ticketId}`);
+  console.log(`Test auth: http://localhost:${PORT}/test-auth`);
+  console.log(`Health check: http://localhost:${PORT}/health`);
 });
 
 module.exports = app;
