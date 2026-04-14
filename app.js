@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 const app = express();
 
 // Configuration - USE ENVIRONMENT VARIABLES
@@ -8,6 +9,8 @@ const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN || 'elotouchcare';
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || `https://${ZENDESK_SUBDOMAIN}.zendesk.com`;
 const API_TOKEN = process.env.ZENDESK_API_TOKEN;
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
+const WEBHOOK_SECRET = process.env.ZENDESKEVM_WEBHOOK_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const TARGET_TAG = process.env.TARGET_TAG || 'ev_new_message';
 const PROCESSED_TAG = 'ev_processed'; // Tag to mark tickets as processed
 const MACRO_ID = process.env.MACRO_ID || '31986608070935';
@@ -28,13 +31,50 @@ setInterval(() => {
 }, 300000);
 
 // Validate required environment variables on startup
-if (!API_TOKEN || !ZENDESK_EMAIL) {
+const requiredEnvVars = {
+  ZENDESK_API_TOKEN: API_TOKEN,
+  ZENDESK_EMAIL: ZENDESK_EMAIL,
+  ZENDESKEVM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  ADMIN_SECRET: ADMIN_SECRET
+};
+const missingVars = Object.entries(requiredEnvVars).filter(([, v]) => !v).map(([k]) => k);
+if (missingVars.length > 0) {
   console.error('❌ FATAL: Missing required environment variables!');
-  console.error('   Required: ZENDESK_API_TOKEN, ZENDESK_EMAIL');
-  console.error('   Current values:');
-  console.error(`   - ZENDESK_API_TOKEN: ${API_TOKEN ? '[SET]' : '[MISSING]'}`);
-  console.error(`   - ZENDESK_EMAIL: ${ZENDESK_EMAIL ? '[SET]' : '[MISSING]'}`);
+  missingVars.forEach(v => console.error(`   - ${v}: [MISSING]`));
   process.exit(1);
+}
+
+// Webhook signature verification middleware
+function verifyZendeskSignature(req, res, next) {
+  const signature = req.headers['x-zendesk-webhook-signature'];
+  const timestamp = req.headers['x-zendesk-webhook-signature-timestamp'];
+
+  if (!signature || !timestamp) {
+    console.warn('Webhook rejected: missing signature headers');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const payload = timestamp + JSON.stringify(req.body);
+  const expected = crypto
+    .createHmac('sha256', WEBHOOK_SECRET)
+    .update(payload)
+    .digest('base64');
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    console.warn('Webhook rejected: invalid signature');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  next();
+}
+
+// Admin endpoint auth middleware
+function verifyAdminSecret(req, res, next) {
+  const provided = req.headers['x-admin-secret'];
+  if (!provided || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_SECRET))) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
 }
 
 // Middleware
@@ -553,18 +593,19 @@ async function processTicket(ticketId) {
 }
 
 // Webhook endpoint for Zendesk
-app.post('/webhook/zendesk', async (req, res) => {
+app.post('/webhook/zendesk', verifyZendeskSignature, async (req, res) => {
   try {
     console.log('Received webhook:', JSON.stringify(req.body, null, 2));
 
-    const ticketId = req.body.ticket?.id;
-    
-    if (!ticketId) {
-      return res.status(400).json({ error: 'No ticket ID provided' });
+    const rawId = req.body.ticket?.id;
+    const ticketId = parseInt(rawId, 10);
+
+    if (!rawId || isNaN(ticketId) || ticketId <= 0) {
+      return res.status(400).json({ error: 'Invalid or missing ticket ID' });
     }
 
     const result = await processTicket(ticketId);
-    
+
     res.json({
       success: result.success,
       ticketId: ticketId,
@@ -573,16 +614,21 @@ app.post('/webhook/zendesk', async (req, res) => {
 
   } catch (error) {
     console.error('Webhook error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Manual processing endpoint (for testing)
-app.post('/process-ticket/:ticketId', async (req, res) => {
+// Manual processing endpoint (admin only)
+app.post('/process-ticket/:ticketId', verifyAdminSecret, async (req, res) => {
   try {
-    const ticketId = req.params.ticketId;
+    const ticketId = parseInt(req.params.ticketId, 10);
+
+    if (isNaN(ticketId) || ticketId <= 0) {
+      return res.status(400).json({ error: 'Invalid ticket ID' });
+    }
+
     const result = await processTicket(ticketId);
-    
+
     res.json({
       success: result.success,
       ticketId: ticketId,
@@ -591,21 +637,26 @@ app.post('/process-ticket/:ticketId', async (req, res) => {
 
   } catch (error) {
     console.error('Manual processing error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Test macro endpoint - shows macro details and actions
-app.get('/test-macro/:macroId', async (req, res) => {
+// Test macro endpoint (admin only)
+app.get('/test-macro/:macroId', verifyAdminSecret, async (req, res) => {
   try {
-    const macroId = req.params.macroId;
+    const macroId = parseInt(req.params.macroId, 10);
+
+    if (isNaN(macroId) || macroId <= 0) {
+      return res.status(400).json({ error: 'Invalid macro ID' });
+    }
+
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
       { headers: getZendeskHeaders() }
     );
-    
+
     const macro = response.data.macro;
-    
+
     res.json({
       success: true,
       macro: {
@@ -617,21 +668,19 @@ app.get('/test-macro/:macroId', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ 
-      success: false,
-      error: error.response?.data || error.message 
-    });
+    console.error('Test macro error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
-// Test auth endpoint - verify credentials are working
-app.get('/test-auth', async (req, res) => {
+// Test auth endpoint (admin only)
+app.get('/test-auth', verifyAdminSecret, async (req, res) => {
   try {
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/users/me.json`,
       { headers: getZendeskHeaders() }
     );
-    
+
     res.json({
       success: true,
       authenticated_as: response.data.user.email,
@@ -639,25 +688,16 @@ app.get('/test-auth', async (req, res) => {
       role: response.data.user.role
     });
   } catch (error) {
-    res.status(error.response?.status || 500).json({ 
-      success: false,
-      status: error.response?.status,
-      error: error.response?.data || error.message,
-      hint: error.response?.status === 401 ? 
-        'Check ZENDESK_API_TOKEN and ZENDESK_EMAIL environment variables' : 
-        'Unknown error'
-    });
+    console.error('Test auth error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    zendesk_domain: ZENDESK_DOMAIN,
-    email_configured: !!ZENDESK_EMAIL,
-    token_configured: !!API_TOKEN
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString()
   });
 });
 
