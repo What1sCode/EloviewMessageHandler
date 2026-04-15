@@ -54,7 +54,7 @@ function verifyZendeskSignature(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const payload = timestamp + JSON.stringify(req.body);
+  const payload = timestamp + req.rawBody;
   const expected = crypto
     .createHmac('sha256', WEBHOOK_SECRET)
     .update(payload)
@@ -77,8 +77,12 @@ function verifyAdminSecret(req, res, next) {
   next();
 }
 
-// Middleware
-app.use(express.json());
+// Middleware - capture raw body for signature verification
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
 
 // Helper function to create authenticated Zendesk API headers
 function getZendeskHeaders() {
