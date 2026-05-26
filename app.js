@@ -591,7 +591,7 @@ async function processTicket(ticketId) {
     };
 
   } catch (error) {
-    console.error(`Error processing ticket ${ticketId}:`, error);
+    console.error(`Error processing ticket ${ticketId}:`, error.message, error.response?.data);
     return { success: false, reason: error.message };
   }
 }
